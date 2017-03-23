@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/pow"
+	"github.com/ethereum/go-ethereum/prometheus"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/hashicorp/golang-lru"
@@ -50,6 +51,8 @@ var (
 	blockInsertTimer = metrics.NewTimer("chain/inserts")
 
 	ErrNoGenesis = errors.New("Genesis not found in chain")
+
+	txCounter = prometheus.NewCounter("core", "tx.count")
 )
 
 const (
@@ -1068,6 +1071,7 @@ func (st *insertStats) report(chain []*types.Block, index int) {
 			hashes = fmt.Sprintf("%x…", end.Hash().Bytes()[:4])
 		}
 		glog.Infof("imported %4d blocks, %5d txs (%7.3f Mg) in %9v (%6.3f Mg/s). #%v [%s]%s", st.processed, txcount, float64(st.usedGas)/1000000, common.PrettyDuration(elapsed), float64(st.usedGas)*1000/float64(elapsed), end.Number(), hashes, extra)
+		txCounter.Add(float64(txcount))
 
 		*st = insertStats{startTime: now, lastIndex: index}
 	}
