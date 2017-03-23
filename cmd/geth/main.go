@@ -148,6 +148,7 @@ func init() {
 		utils.GpobaseStepUpFlag,
 		utils.GpobaseCorrectionFactorFlag,
 		utils.ExtraDataFlag,
+		utils.PrometheusAddrFlag,
 	}
 	app.Flags = append(app.Flags, debug.Flags...)
 

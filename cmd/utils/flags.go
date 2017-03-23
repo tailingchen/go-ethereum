@@ -51,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/pow"
+	"github.com/ethereum/go-ethereum/prometheus"
 	"github.com/ethereum/go-ethereum/rpc"
 	whisper "github.com/ethereum/go-ethereum/whisper/whisperv2"
 	"gopkg.in/urfave/cli.v1"
@@ -412,6 +413,11 @@ var (
 		Name:  "gpobasecf",
 		Usage: "Suggested gas price base correction factor (%)",
 		Value: 110,
+	}
+	PrometheusAddrFlag = cli.StringFlag{
+		Name:  prometheus.PrometheusAddrFlag,
+		Usage: "prometheus push-gateway address",
+		Value: "",
 	}
 )
 
