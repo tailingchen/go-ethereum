@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,9 +89,9 @@ type worker struct {
 	mu sync.Mutex
 
 	// update loop
-	mux    *event.TypeMux
-	events *event.TypeMuxSubscription
-	wg     sync.WaitGroup
+	eventPool *event.FeedPool
+	events    []event.Subscription
+	wg        sync.WaitGroup
 
 	agents map[Agent]struct{}
 	recv   chan *Result
@@ -121,12 +122,12 @@ type worker struct {
 	fullValidation bool
 }
 
-func newWorker(config *params.ChainConfig, engine consensus.Engine, coinbase common.Address, eth Backend, mux *event.TypeMux) *worker {
+func newWorker(config *params.ChainConfig, engine consensus.Engine, coinbase common.Address, eth Backend, eventPool *event.FeedPool) *worker {
 	worker := &worker{
 		config:         config,
 		engine:         engine,
 		eth:            eth,
-		mux:            mux,
+		eventPool:      eventPool,
 		chainDb:        eth.ChainDb(),
 		recv:           make(chan *Result, resultQueueSize),
 		chain:          eth.BlockChain(),
@@ -138,7 +139,7 @@ func newWorker(config *params.ChainConfig, engine consensus.Engine, coinbase com
 		unconfirmed:    newUnconfirmedBlocks(eth.BlockChain(), 5),
 		fullValidation: false,
 	}
-	worker.events = worker.mux.Subscribe(core.ChainHeadEvent{}, core.ChainSideEvent{}, core.TxPreEvent{})
+	//	worker.events = worker.mux.Subscribe(core.ChainHeadEvent{}, core.ChainSideEvent{}, core.TxPreEvent{})
 	go worker.update()
 
 	go worker.wait()
@@ -230,9 +231,35 @@ func (self *worker) unregister(agent Agent) {
 }
 
 func (self *worker) update() {
-	for event := range self.events.Chan() {
+	//worker.events = worker.mux.Subscribe(core.ChainHeadEvent{}, core.ChainSideEvent{}, core.TxPreEvent{})
+	var (
+		chainHCh = make(chan core.ChainHeadEvent, 10)
+		chainSCh = make(chan core.ChainSideEvent, 10)
+		txPreCh  = make(chan core.TxPreEvent, 4096)
+	)
+
+	// subscribe events
+	eventChs := []interface{}{chainHCh, chainSCh, txPreCh}
+	subs := make([]event.Subscription, len(eventChs))
+	cases := make([]reflect.SelectCase, len(eventChs))
+	for i, ch := range eventChs {
+		subs[i] = self.eventPool.Subscribe(ch)
+		cases[i] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
+	}
+
+	// unsubscribe events
+	unSubs := func() {
+		for _, sub := range subs {
+			sub.Unsubscribe()
+		}
+	}
+
+	_ = unSubs
+
+	for {
+		_, value, _ := reflect.Select(cases)
 		// A real event arrived, process interesting content
-		switch ev := event.Data.(type) {
+		switch ev := value.Interface().(type) {
 		case core.ChainHeadEvent:
 			self.commitNewWork()
 		case core.ChainSideEvent:
@@ -248,7 +275,7 @@ func (self *worker) update() {
 				txs := map[common.Address]types.Transactions{acc: {ev.Tx}}
 				txset := types.NewTransactionsByPriceAndNonce(txs)
 
-				self.current.commitTransactions(self.mux, txset, self.chain, self.coinbase)
+				self.current.commitTransactions(self.eventPool, txset, self.chain, self.coinbase)
 				self.currentMu.Unlock()
 			}
 		}
@@ -272,7 +299,7 @@ func (self *worker) wait() {
 					log.Error("Mined invalid block", "err", err)
 					continue
 				}
-				go self.mux.Post(core.NewMinedBlockEvent{Block: block})
+				go self.eventPool.Send(core.NewMinedBlockEvent{Block: block})
 			} else {
 				work.state.CommitTo(self.chainDb, self.config.IsEIP158(block.Number()))
 				stat, err := self.chain.WriteBlock(block)
@@ -302,12 +329,12 @@ func (self *worker) wait() {
 
 				// broadcast before waiting for validation
 				go func(block *types.Block, logs []*types.Log, receipts []*types.Receipt) {
-					self.mux.Post(core.NewMinedBlockEvent{Block: block})
-					self.mux.Post(core.ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
+					self.eventPool.Send(core.NewMinedBlockEvent{Block: block})
+					self.eventPool.Send(core.ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
 
 					if stat == core.CanonStatTy {
-						self.mux.Post(core.ChainHeadEvent{Block: block})
-						self.mux.Post(logs)
+						self.eventPool.Send(core.ChainHeadEvent{Block: block})
+						self.eventPool.Send(logs)
 					}
 					if err := core.WriteBlockReceipts(self.chainDb, block.Hash(), block.NumberU64(), receipts); err != nil {
 						log.Warn("Failed writing block receipts", "err", err)
@@ -442,7 +469,7 @@ func (self *worker) commitNewWork() {
 		return
 	}
 	txs := types.NewTransactionsByPriceAndNonce(pending)
-	work.commitTransactions(self.mux, txs, self.chain, self.coinbase)
+	work.commitTransactions(self.eventPool, txs, self.chain, self.coinbase)
 
 	self.eth.TxPool().RemoveBatch(work.failedTxs)
 
@@ -496,7 +523,7 @@ func (self *worker) commitUncle(work *Work, uncle *types.Header) error {
 	return nil
 }
 
-func (env *Work) commitTransactions(mux *event.TypeMux, txs *types.TransactionsByPriceAndNonce, bc *core.BlockChain, coinbase common.Address) {
+func (env *Work) commitTransactions(eventPool *event.FeedPool, txs *types.TransactionsByPriceAndNonce, bc *core.BlockChain, coinbase common.Address) {
 	gp := new(core.GasPool).AddGas(env.header.GasLimit)
 
 	var coalescedLogs []*types.Log
@@ -555,10 +582,10 @@ func (env *Work) commitTransactions(mux *event.TypeMux, txs *types.TransactionsB
 		}
 		go func(logs []*types.Log, tcount int) {
 			if len(logs) > 0 {
-				mux.Post(core.PendingLogsEvent{Logs: logs})
+				eventPool.Send(core.PendingLogsEvent{Logs: logs})
 			}
 			if tcount > 0 {
-				mux.Post(core.PendingStateEvent{})
+				eventPool.Send(core.PendingStateEvent{})
 			}
 		}(cpy, env.tcount)
 	}
