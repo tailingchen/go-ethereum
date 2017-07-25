@@ -47,7 +47,7 @@ type LightChain struct {
 	hc           *core.HeaderChain
 	chainDb      ethdb.Database
 	odr          OdrBackend
-	eventMux     *event.TypeMux
+	eventPool    *event.FeedPool
 	genesisBlock *types.Block
 
 	mu      sync.RWMutex
@@ -70,7 +70,7 @@ type LightChain struct {
 // NewLightChain returns a fully initialised light chain using information
 // available in the database. It initialises the default Ethereum header
 // validator.
-func NewLightChain(odr OdrBackend, config *params.ChainConfig, engine consensus.Engine, mux *event.TypeMux) (*LightChain, error) {
+func NewLightChain(odr OdrBackend, config *params.ChainConfig, engine consensus.Engine, eventPool *event.FeedPool) (*LightChain, error) {
 	bodyCache, _ := lru.New(bodyCacheLimit)
 	bodyRLPCache, _ := lru.New(bodyCacheLimit)
 	blockCache, _ := lru.New(blockCacheLimit)
@@ -78,7 +78,7 @@ func NewLightChain(odr OdrBackend, config *params.ChainConfig, engine consensus.
 	bc := &LightChain{
 		chainDb:      odr.Database(),
 		odr:          odr,
-		eventMux:     mux,
+		eventPool:    eventPool,
 		quit:         make(chan struct{}),
 		bodyCache:    bodyCache,
 		bodyRLPCache: bodyRLPCache,
@@ -322,11 +322,11 @@ func (self *LightChain) postChainEvents(events []interface{}) {
 	for _, event := range events {
 		if event, ok := event.(core.ChainEvent); ok {
 			if self.LastBlockHash() == event.Hash {
-				self.eventMux.Post(core.ChainHeadEvent{Block: event.Block})
+				self.eventPool.Send(core.ChainHeadEvent{Block: event.Block})
 			}
 		}
 		// Fire the insertion events individually too
-		self.eventMux.Post(event)
+		self.eventPool.Send(event)
 	}
 }
 

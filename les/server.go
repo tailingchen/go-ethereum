@@ -49,7 +49,7 @@ type LesServer struct {
 
 func NewLesServer(eth *eth.Ethereum, config *eth.Config) (*LesServer, error) {
 	quitSync := make(chan struct{})
-	pm, err := NewProtocolManager(eth.BlockChain().Config(), false, config.NetworkId, eth.EventMux(), eth.Engine(), newPeerSet(), eth.BlockChain(), eth.TxPool(), eth.ChainDb(), nil, nil, quitSync, new(sync.WaitGroup))
+	pm, err := NewProtocolManager(eth.BlockChain().Config(), false, config.NetworkId, eth.EventPool(), eth.Engine(), newPeerSet(), eth.BlockChain(), eth.TxPool(), eth.ChainDb(), nil, nil, quitSync, new(sync.WaitGroup))
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +282,8 @@ func (s *requestCostStats) update(msgCode, reqCnt, cost uint64) {
 
 func (pm *ProtocolManager) blockLoop() {
 	pm.wg.Add(1)
-	sub := pm.eventMux.Subscribe(core.ChainHeadEvent{})
+	chainHCh := make(chan core.ChainHeadEvent)
+	sub := pm.eventPool.Subscribe(chainHCh)
 	newCht := make(chan struct{}, 10)
 	newCht <- struct{}{}
 	go func() {
@@ -291,10 +292,10 @@ func (pm *ProtocolManager) blockLoop() {
 		lastBroadcastTd := common.Big0
 		for {
 			select {
-			case ev := <-sub.Chan():
+			case ev := <-chainHCh:
 				peers := pm.peers.AllPeers()
 				if len(peers) > 0 {
-					header := ev.Data.(core.ChainHeadEvent).Block.Header()
+					header := ev.Block.Header()
 					hash := header.Hash()
 					number := header.Number.Uint64()
 					td := core.GetTd(pm.chainDb, hash, number)

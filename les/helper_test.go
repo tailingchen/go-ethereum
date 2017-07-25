@@ -133,23 +133,23 @@ func testRCL() RequestCostList {
 // channels for different events.
 func newTestProtocolManager(lightSync bool, blocks int, generator func(int, *core.BlockGen), peers *peerSet, odr *LesOdr, db ethdb.Database) (*ProtocolManager, error) {
 	var (
-		evmux  = new(event.TypeMux)
+		evpool = new(event.FeedPool)
 		engine = ethash.NewFaker()
 		gspec  = core.Genesis{
 			Config: params.TestChainConfig,
 			Alloc:  core.GenesisAlloc{testBankAddress: {Balance: testBankFunds}},
 		}
 		genesis = gspec.MustCommit(db)
-		chain       BlockChain
+		chain   BlockChain
 	)
 	if peers == nil {
 		peers = newPeerSet()
 	}
 
 	if lightSync {
-		chain, _ = light.NewLightChain(odr, gspec.Config, engine, evmux)
+		chain, _ = light.NewLightChain(odr, gspec.Config, engine, evpool)
 	} else {
-		blockchain, _ := core.NewBlockChain(db, gspec.Config, engine, evmux, vm.Config{})
+		blockchain, _ := core.NewBlockChain(db, gspec.Config, engine, evpool, vm.Config{})
 		gchain, _ := core.GenerateChain(gspec.Config, genesis, db, blocks, generator)
 		if _, err := blockchain.InsertChain(gchain); err != nil {
 			panic(err)
@@ -157,7 +157,7 @@ func newTestProtocolManager(lightSync bool, blocks int, generator func(int, *cor
 		chain = blockchain
 	}
 
-	pm, err := NewProtocolManager(gspec.Config, lightSync, NetworkId, evmux, engine, peers, chain, nil, db, odr, nil, make(chan struct{}), new(sync.WaitGroup))
+	pm, err := NewProtocolManager(gspec.Config, lightSync, NetworkId, evpool, engine, peers, chain, nil, db, odr, nil, make(chan struct{}), new(sync.WaitGroup))
 	if err != nil {
 		return nil, err
 	}

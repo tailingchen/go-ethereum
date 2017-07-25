@@ -43,21 +43,21 @@ var txPermanent = uint64(500)
 // always receive all locally signed transactions in the same order as they are
 // created.
 type TxPool struct {
-	config   *params.ChainConfig
-	signer   types.Signer
-	quit     chan bool
-	eventMux *event.TypeMux
-	events   *event.TypeMuxSubscription
-	mu       sync.RWMutex
-	chain    *LightChain
-	odr      OdrBackend
-	chainDb  ethdb.Database
-	relay    TxRelayBackend
-	head     common.Hash
-	nonce    map[common.Address]uint64            // "pending" nonce
-	pending  map[common.Hash]*types.Transaction   // pending transactions by tx hash
-	mined    map[common.Hash][]*types.Transaction // mined transactions by block hash
-	clearIdx uint64                               // earliest block nr that can contain mined tx info
+	config    *params.ChainConfig
+	signer    types.Signer
+	quit      chan bool
+	eventPool *event.FeedPool
+	events    event.Subscription
+	mu        sync.RWMutex
+	chain     *LightChain
+	odr       OdrBackend
+	chainDb   ethdb.Database
+	relay     TxRelayBackend
+	head      common.Hash
+	nonce     map[common.Address]uint64            // "pending" nonce
+	pending   map[common.Hash]*types.Transaction   // pending transactions by tx hash
+	mined     map[common.Hash][]*types.Transaction // mined transactions by block hash
+	clearIdx  uint64                               // earliest block nr that can contain mined tx info
 
 	homestead bool
 }
@@ -78,22 +78,21 @@ type TxRelayBackend interface {
 }
 
 // NewTxPool creates a new light transaction pool
-func NewTxPool(config *params.ChainConfig, eventMux *event.TypeMux, chain *LightChain, relay TxRelayBackend) *TxPool {
+func NewTxPool(config *params.ChainConfig, eventPool *event.FeedPool, chain *LightChain, relay TxRelayBackend) *TxPool {
 	pool := &TxPool{
-		config:   config,
-		signer:   types.HomesteadSigner{},
-		nonce:    make(map[common.Address]uint64),
-		pending:  make(map[common.Hash]*types.Transaction),
-		mined:    make(map[common.Hash][]*types.Transaction),
-		quit:     make(chan bool),
-		eventMux: eventMux,
-		events:   eventMux.Subscribe(core.ChainHeadEvent{}),
-		chain:    chain,
-		relay:    relay,
-		odr:      chain.Odr(),
-		chainDb:  chain.Odr().Database(),
-		head:     chain.CurrentHeader().Hash(),
-		clearIdx: chain.CurrentHeader().Number.Uint64(),
+		config:    config,
+		signer:    types.HomesteadSigner{},
+		nonce:     make(map[common.Address]uint64),
+		pending:   make(map[common.Hash]*types.Transaction),
+		mined:     make(map[common.Hash][]*types.Transaction),
+		quit:      make(chan bool),
+		eventPool: eventPool,
+		chain:     chain,
+		relay:     relay,
+		odr:       chain.Odr(),
+		chainDb:   chain.Odr().Database(),
+		head:      chain.CurrentHeader().Hash(),
+		clearIdx:  chain.CurrentHeader().Number.Uint64(),
 	}
 	go pool.eventLoop()
 
@@ -280,13 +279,20 @@ const blockCheckTimeout = time.Second * 3
 // eventLoop processes chain head events and also notifies the tx relay backend
 // about the new head hash and tx state changes
 func (pool *TxPool) eventLoop() {
-	for ev := range pool.events.Chan() {
-		switch ev.Data.(type) {
-		case core.ChainHeadEvent:
-			pool.setNewHead(ev.Data.(core.ChainHeadEvent).Block.Header())
+	var (
+		chainHCh = make(chan core.ChainHeadEvent)
+	)
+	pool.events = pool.eventPool.Subscribe(chainHCh)
+
+	for {
+		select {
+		case ev := <-chainHCh:
+			pool.setNewHead(ev.Block.Header())
 			// hack in order to avoid hogging the lock; this part will
 			// be replaced by a subsequent PR.
 			time.Sleep(time.Millisecond)
+		case <-pool.quit:
+			return
 		}
 	}
 }
@@ -307,8 +313,8 @@ func (pool *TxPool) setNewHead(head *types.Header) {
 
 // Stop stops the light transaction pool
 func (pool *TxPool) Stop() {
-	close(pool.quit)
 	pool.events.Unsubscribe()
+	close(pool.quit)
 	log.Info("Transaction pool stopped")
 }
 
@@ -394,7 +400,7 @@ func (self *TxPool) add(ctx context.Context, tx *types.Transaction) error {
 		// Notify the subscribers. This event is posted in a goroutine
 		// because it's possible that somewhere during the post "Remove transaction"
 		// gets called which will then wait for the global tx pool lock and deadlock.
-		go self.eventMux.Post(core.TxPreEvent{Tx: tx})
+		go self.eventPool.Send(core.TxPreEvent{Tx: tx})
 	}
 
 	// Print a log message if low enough level is set

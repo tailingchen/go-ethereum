@@ -140,8 +140,8 @@ func (b *LesApiBackend) ChainDb() ethdb.Database {
 	return b.eth.chainDb
 }
 
-func (b *LesApiBackend) EventMux() *event.TypeMux {
-	return b.eth.eventMux
+func (b *LesApiBackend) EventPool() *event.FeedPool {
+	return b.eth.eventPool
 }
 
 func (b *LesApiBackend) AccountManager() *accounts.Manager {

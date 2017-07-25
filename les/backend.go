@@ -63,7 +63,7 @@ type LightEthereum struct {
 
 	ApiBackend *LesApiBackend
 
-	eventMux       *event.TypeMux
+	eventPool      *event.FeedPool
 	engine         consensus.Engine
 	accountManager *accounts.Manager
 
@@ -91,7 +91,7 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 	eth := &LightEthereum{
 		chainConfig:    chainConfig,
 		chainDb:        chainDb,
-		eventMux:       ctx.EventMux,
+		eventPool:      ctx.EventPool,
 		peers:          peers,
 		reqDist:        newRequestDistributor(peers, quitSync),
 		accountManager: ctx.AccountManager,
@@ -104,7 +104,7 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 	eth.serverPool = newServerPool(chainDb, quitSync, &eth.wg)
 	eth.retriever = newRetrieveManager(peers, eth.reqDist, eth.serverPool)
 	eth.odr = NewLesOdr(chainDb, eth.retriever)
-	if eth.blockchain, err = light.NewLightChain(eth.odr, eth.chainConfig, eth.engine, eth.eventMux); err != nil {
+	if eth.blockchain, err = light.NewLightChain(eth.odr, eth.chainConfig, eth.engine, eth.eventPool); err != nil {
 		return nil, err
 	}
 	// Rewind the chain in case of an incompatible config upgrade.
@@ -114,8 +114,8 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 		core.WriteChainConfig(chainDb, genesisHash, chainConfig)
 	}
 
-	eth.txPool = light.NewTxPool(eth.chainConfig, eth.eventMux, eth.blockchain, eth.relay)
-	if eth.protocolManager, err = NewProtocolManager(eth.chainConfig, true, config.NetworkId, eth.eventMux, eth.engine, eth.peers, eth.blockchain, nil, chainDb, eth.odr, eth.relay, quitSync, &eth.wg); err != nil {
+	eth.txPool = light.NewTxPool(eth.chainConfig, eth.eventPool, eth.blockchain, eth.relay)
+	if eth.protocolManager, err = NewProtocolManager(eth.chainConfig, true, config.NetworkId, eth.eventPool, eth.engine, eth.peers, eth.blockchain, nil, chainDb, eth.odr, eth.relay, quitSync, &eth.wg); err != nil {
 		return nil, err
 	}
 	eth.ApiBackend = &LesApiBackend{eth, nil}
@@ -165,7 +165,7 @@ func (s *LightEthereum) APIs() []rpc.API {
 		}, {
 			Namespace: "eth",
 			Version:   "1.0",
-			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
+			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventPool),
 			Public:    true,
 		}, {
 			Namespace: "eth",
@@ -190,7 +190,7 @@ func (s *LightEthereum) TxPool() *light.TxPool              { return s.txPool }
 func (s *LightEthereum) Engine() consensus.Engine           { return s.engine }
 func (s *LightEthereum) LesVersion() int                    { return int(s.protocolManager.SubProtocols[0].Version) }
 func (s *LightEthereum) Downloader() *downloader.Downloader { return s.protocolManager.downloader }
-func (s *LightEthereum) EventMux() *event.TypeMux           { return s.eventMux }
+func (s *LightEthereum) EventPool() *event.FeedPool         { return s.eventPool }
 
 // Protocols implements node.Service, returning all the currently configured
 // network protocols to start.
@@ -216,7 +216,7 @@ func (s *LightEthereum) Stop() error {
 	s.protocolManager.Stop()
 	s.txPool.Stop()
 
-	s.eventMux.Stop()
+	//s.eventMux.Stop()
 
 	time.Sleep(time.Millisecond * 200)
 	s.chainDb.Close()
