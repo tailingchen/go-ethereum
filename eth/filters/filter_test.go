@@ -49,14 +49,14 @@ func BenchmarkMipmaps(b *testing.B) {
 	defer os.RemoveAll(dir)
 
 	var (
-		db, _   = ethdb.NewLDBDatabase(dir, 0, 0)
-		mux     = new(event.TypeMux)
-		backend = &testBackend{mux, db}
-		key1, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		addr1   = crypto.PubkeyToAddress(key1.PublicKey)
-		addr2   = common.BytesToAddress([]byte("jeff"))
-		addr3   = common.BytesToAddress([]byte("ethereum"))
-		addr4   = common.BytesToAddress([]byte("random addresses please"))
+		db, _     = ethdb.NewLDBDatabase(dir, 0, 0)
+		eventPool = new(event.FeedPool)
+		backend   = &testBackend{eventPool, db}
+		key1, _   = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr1     = crypto.PubkeyToAddress(key1.PublicKey)
+		addr2     = common.BytesToAddress([]byte("jeff"))
+		addr3     = common.BytesToAddress([]byte("ethereum"))
+		addr4     = common.BytesToAddress([]byte("random addresses please"))
 	)
 	defer db.Close()
 
@@ -119,11 +119,11 @@ func TestFilters(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	var (
-		db, _   = ethdb.NewLDBDatabase(dir, 0, 0)
-		mux     = new(event.TypeMux)
-		backend = &testBackend{mux, db}
-		key1, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		addr    = crypto.PubkeyToAddress(key1.PublicKey)
+		db, _     = ethdb.NewLDBDatabase(dir, 0, 0)
+		eventPool = new(event.FeedPool)
+		backend   = &testBackend{eventPool, db}
+		key1, _   = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key1.PublicKey)
 
 		hash1 = common.BytesToHash([]byte("topic1"))
 		hash2 = common.BytesToHash([]byte("topic2"))

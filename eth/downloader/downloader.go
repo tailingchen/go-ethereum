@@ -95,8 +95,8 @@ var (
 )
 
 type Downloader struct {
-	mode SyncMode       // Synchronisation mode defining the strategy used (per sync cycle)
-	mux  *event.TypeMux // Event multiplexer to announce sync operation events
+	mode      SyncMode        // Synchronisation mode defining the strategy used (per sync cycle)
+	eventPool *event.FeedPool // Event multiplexer to announce sync operation events
 
 	queue   *queue   // Scheduler for selecting the hashes to download
 	peers   *peerSet // Set of active peers from which download can proceed
@@ -201,7 +201,7 @@ type BlockChain interface {
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
-func New(mode SyncMode, stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, lightchain LightChain, dropPeer peerDropFn) *Downloader {
+func New(mode SyncMode, stateDb ethdb.Database, eventPool *event.FeedPool, chain BlockChain, lightchain LightChain, dropPeer peerDropFn) *Downloader {
 	if lightchain == nil {
 		lightchain = chain
 	}
@@ -209,7 +209,7 @@ func New(mode SyncMode, stateDb ethdb.Database, mux *event.TypeMux, chain BlockC
 	dl := &Downloader{
 		mode:           mode,
 		stateDB:        stateDb,
-		mux:            mux,
+		eventPool:      eventPool,
 		queue:          newQueue(),
 		peers:          newPeerSet(),
 		rttEstimate:    uint64(rttMaxEstimate),
@@ -400,13 +400,13 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td *big.Int, mode 
 // syncWithPeer starts a block synchronization based on the hash chain from the
 // specified peer and head hash.
 func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td *big.Int) (err error) {
-	d.mux.Post(StartEvent{})
+	d.eventPool.Send(StartEvent{})
 	defer func() {
 		// reset on error
 		if err != nil {
-			d.mux.Post(FailedEvent{err})
+			d.eventPool.Send(FailedEvent{err})
 		} else {
-			d.mux.Post(DoneEvent{})
+			d.eventPool.Send(DoneEvent{})
 		}
 	}()
 	if p.version < 62 {

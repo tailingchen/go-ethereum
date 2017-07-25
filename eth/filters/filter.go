@@ -32,7 +32,7 @@ import (
 
 type Backend interface {
 	ChainDb() ethdb.Database
-	EventMux() *event.TypeMux
+	EventPool() *event.FeedPool
 	HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error)
 	GetReceipts(ctx context.Context, blockHash common.Hash) (types.Receipts, error)
 }

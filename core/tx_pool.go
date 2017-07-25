@@ -78,6 +78,13 @@ var (
 )
 
 var (
+	// rmTxChanSize is the channel size of RemovedTransactionEvent
+	rmTxChanSize = 10
+	// chainHeadChanSize is the channel size of ChainHeadEvent
+	chainHeadChanSize = 10
+)
+
+var (
 	// Metrics for the pending pool
 	pendingDiscardCounter   = metrics.NewCounter("txpool/pending/discard")
 	pendingReplaceCounter   = metrics.NewCounter("txpool/pending/replace")
@@ -155,8 +162,10 @@ type TxPool struct {
 	pendingState *state.ManagedState
 	gasLimit     func() *big.Int // The current gas limit function callback
 	gasPrice     *big.Int
-	eventMux     *event.TypeMux
-	events       *event.TypeMuxSubscription
+	eventPool    *event.FeedPool
+	rmTxCh       chan RemovedTransactionEvent
+	chainHeadCh  chan ChainHeadEvent
+	eventSubs    []event.Subscription
 	locals       *accountSet
 	signer       types.Signer
 	mu           sync.RWMutex
@@ -175,9 +184,15 @@ type TxPool struct {
 
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
 // trnsactions from the network.
-func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, eventMux *event.TypeMux, currentStateFn stateFn, gasLimitFn func() *big.Int) *TxPool {
+func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, eventPool *event.FeedPool, currentStateFn stateFn, gasLimitFn func() *big.Int) *TxPool {
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
+
+	// Subscribe events
+	rmTxCh := make(chan RemovedTransactionEvent, rmTxChanSize)
+	rmTxSub := eventPool.Subscribe(rmTxCh)
+	chainHeadCh := make(chan ChainHeadEvent, chainHeadChanSize)
+	chainHeadSub := eventPool.Subscribe(chainHeadCh)
 
 	// Create the transaction pool with its initial settings
 	pool := &TxPool{
@@ -188,12 +203,14 @@ func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, eventMux *e
 		queue:        make(map[common.Address]*txList),
 		beats:        make(map[common.Address]time.Time),
 		all:          make(map[common.Hash]*types.Transaction),
-		eventMux:     eventMux,
+		eventPool:    eventPool,
+		rmTxCh:       rmTxCh,
+		chainHeadCh:  chainHeadCh,
+		eventSubs:    []event.Subscription{rmTxSub, chainHeadSub},
 		currentState: currentStateFn,
 		gasLimit:     gasLimitFn,
 		gasPrice:     new(big.Int).SetUint64(config.PriceLimit),
 		pendingState: nil,
-		events:       eventMux.Subscribe(ChainHeadEvent{}, RemovedTransactionEvent{}),
 		quit:         make(chan struct{}),
 	}
 	pool.locals = newAccountSet(pool.signer)
@@ -223,24 +240,17 @@ func (pool *TxPool) eventLoop() {
 	for {
 		select {
 		// Handle any events fired by the system
-		case ev, ok := <-pool.events.Chan():
-			if !ok {
-				return
-			}
-			switch ev := ev.Data.(type) {
-			case ChainHeadEvent:
-				pool.mu.Lock()
-				if ev.Block != nil {
-					if pool.chainconfig.IsHomestead(ev.Block.Number()) {
-						pool.homestead = true
-					}
+		case ev := <-pool.chainHeadCh:
+			pool.mu.Lock()
+			if ev.Block != nil {
+				if pool.chainconfig.IsHomestead(ev.Block.Number()) {
+					pool.homestead = true
 				}
-				pool.resetState()
-				pool.mu.Unlock()
-
-			case RemovedTransactionEvent:
-				pool.addTxs(ev.Txs, false)
 			}
+			pool.resetState()
+			pool.mu.Unlock()
+		case ev := <-pool.rmTxCh:
+			pool.addTxs(ev.Txs, false)
 
 		// Handle stats reporting ticks
 		case <-report.C:
@@ -253,6 +263,9 @@ func (pool *TxPool) eventLoop() {
 				log.Debug("Transaction pool status report", "executable", pending, "queued", queued, "stales", stales)
 				prevPending, prevQueued, prevStales = pending, queued, stales
 			}
+
+		case <-pool.quit:
+			return
 		}
 	}
 }
@@ -283,7 +296,9 @@ func (pool *TxPool) resetState() {
 
 // Stop terminates the transaction pool.
 func (pool *TxPool) Stop() {
-	pool.events.Unsubscribe()
+	for _, sub := range pool.eventSubs {
+		sub.Unsubscribe()
+	}
 	close(pool.quit)
 	pool.wg.Wait()
 
@@ -549,7 +564,7 @@ func (pool *TxPool) promoteTx(addr common.Address, hash common.Hash, tx *types.T
 	// Set the potentially new pending nonce and notify any subsystems of the new tx
 	pool.beats[addr] = time.Now()
 	pool.pendingState.SetNonce(addr, tx.Nonce()+1)
-	go pool.eventMux.Post(TxPreEvent{tx})
+	go pool.eventPool.Send(TxPreEvent{tx})
 }
 
 // AddLocal enqueues a single transaction into the pool if it is valid, marking

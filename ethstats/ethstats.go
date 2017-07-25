@@ -65,6 +65,7 @@ type Service struct {
 
 	pongCh chan struct{} // Pong notifications are fed into this channel
 	histCh chan []uint64 // History request block numbers are fed into this channel
+	quit   chan struct{} // Quit event loop when stopping
 }
 
 // New returns a monitoring service ready for stats reporting.
@@ -113,6 +114,7 @@ func (s *Service) Start(server *p2p.Server) error {
 
 // Stop implements node.Service, terminating the monitoring and reporting daemon.
 func (s *Service) Stop() error {
+	close(s.quit)
 	log.Info("Stats daemon stopped")
 	return nil
 }
@@ -121,21 +123,22 @@ func (s *Service) Stop() error {
 // until termination.
 func (s *Service) loop() {
 	// Subscribe to chain events to execute updates on
-	var emux *event.TypeMux
+	var epool *event.FeedPool
 	if s.eth != nil {
-		emux = s.eth.EventMux()
+		epool = s.eth.EventPool()
 	} else {
-		emux = s.les.EventMux()
+		epool = s.les.EventPool()
 	}
-	headSub := emux.Subscribe(core.ChainHeadEvent{})
+	chainHeadCh := make(chan core.ChainHeadEvent)
+	headSub := epool.Subscribe(chainHeadCh)
 	defer headSub.Unsubscribe()
 
-	txSub := emux.Subscribe(core.TxPreEvent{})
-	defer txSub.Unsubscribe()
+	txPreCh := make(chan core.TxPreEvent, 4096)
+	txPreSub := epool.Subscribe(txPreCh)
+	defer txPreSub.Unsubscribe()
 
 	// Start a goroutine that exhausts the subsciptions to avoid events piling up
 	var (
-		quitCh = make(chan struct{})
 		headCh = make(chan *types.Block, 1)
 		txCh   = make(chan struct{}, 1)
 	)
@@ -145,22 +148,14 @@ func (s *Service) loop() {
 		for {
 			select {
 			// Notify of chain head events, but drop if too frequent
-			case head, ok := <-headSub.Chan():
-				if !ok { // node stopped
-					close(quitCh)
-					return
-				}
+			case head := <-chainHeadCh:
 				select {
-				case headCh <- head.Data.(core.ChainHeadEvent).Block:
+				case headCh <- head.Block:
 				default:
 				}
 
 			// Notify of new transaction events, but drop if too frequent
-			case _, ok := <-txSub.Chan():
-				if !ok { // node stopped
-					close(quitCh)
-					return
-				}
+			case <-txPreCh:
 				if time.Duration(mclock.Now()-lastTx) < time.Second {
 					continue
 				}
@@ -170,6 +165,8 @@ func (s *Service) loop() {
 				case txCh <- struct{}{}:
 				default:
 				}
+			case <-s.quit:
+				return
 			}
 		}
 	}()
@@ -222,7 +219,7 @@ func (s *Service) loop() {
 
 		for err == nil {
 			select {
-			case <-quitCh:
+			case <-s.quit:
 				conn.Close()
 				return
 

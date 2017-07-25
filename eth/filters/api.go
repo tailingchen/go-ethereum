@@ -53,7 +53,7 @@ type filter struct {
 type PublicFilterAPI struct {
 	backend   Backend
 	useMipMap bool
-	mux       *event.TypeMux
+	eventPool *event.FeedPool
 	quit      chan struct{}
 	chainDb   ethdb.Database
 	events    *EventSystem
@@ -66,9 +66,9 @@ func NewPublicFilterAPI(backend Backend, lightMode bool) *PublicFilterAPI {
 	api := &PublicFilterAPI{
 		backend:   backend,
 		useMipMap: !lightMode,
-		mux:       backend.EventMux(),
+		eventPool: backend.EventPool(),
 		chainDb:   backend.ChainDb(),
-		events:    NewEventSystem(backend.EventMux(), backend, lightMode),
+		events:    NewEventSystem(backend.EventPool(), backend, lightMode),
 		filters:   make(map[rpc.ID]*filter),
 	}
 

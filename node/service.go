@@ -32,7 +32,7 @@ import (
 type ServiceContext struct {
 	config         *Config
 	services       map[reflect.Type]Service // Index of the already constructed services
-	EventMux       *event.TypeMux           // Event multiplexer used for decoupled notifications
+	EventPool      *event.FeedPool          // Event multiplexer used for decoupled notifications
 	AccountManager *accounts.Manager        // Account manager created by the node.
 }
 

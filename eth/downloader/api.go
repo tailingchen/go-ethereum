@@ -29,19 +29,19 @@ import (
 // It offers only methods that operates on data that can be available to anyone without security risks.
 type PublicDownloaderAPI struct {
 	d                         *Downloader
-	mux                       *event.TypeMux
+	eventPool                 *event.FeedPool
 	installSyncSubscription   chan chan interface{}
 	uninstallSyncSubscription chan *uninstallSyncSubscriptionRequest
 }
 
 // NewPublicDownloaderAPI create a new PublicDownloaderAPI. The API has an internal event loop that
-// listens for events from the downloader through the global event mux. In case it receives one of
+// listens for events from the downloader through the global event pool. In case it receives one of
 // these events it broadcasts it to all syncing subscriptions that are installed through the
 // installSyncSubscription channel.
-func NewPublicDownloaderAPI(d *Downloader, m *event.TypeMux) *PublicDownloaderAPI {
+func NewPublicDownloaderAPI(d *Downloader, p *event.FeedPool) *PublicDownloaderAPI {
 	api := &PublicDownloaderAPI{
-		d:   d,
-		mux: m,
+		d:                         d,
+		eventPool:                 p,
 		installSyncSubscription:   make(chan chan interface{}),
 		uninstallSyncSubscription: make(chan *uninstallSyncSubscriptionRequest),
 	}
@@ -55,9 +55,27 @@ func NewPublicDownloaderAPI(d *Downloader, m *event.TypeMux) *PublicDownloaderAP
 // sync subscriptions and broadcasts sync status updates to the installed sync subscriptions.
 func (api *PublicDownloaderAPI) eventLoop() {
 	var (
-		sub               = api.mux.Subscribe(StartEvent{}, DoneEvent{}, FailedEvent{})
+		//		sub               = api.mux.Subscribe(StartEvent{}, DoneEvent{}, FailedEvent{})
 		syncSubscriptions = make(map[chan interface{}]struct{})
+		startCh           = make(chan StartEvent)
+		doneCh            = make(chan DoneEvent)
+		failedCh          = make(chan FailedEvent)
 	)
+
+	// subscribe events
+	eventChs := []interface{}{startCh, doneCh, failedCh}
+	subs := make([]event.Subscription, len(eventChs))
+	for i, ch := range eventChs {
+		subs[i] = api.eventPool.Subscribe(ch)
+	}
+
+	// unsubscribe events
+	unSubs := func() {
+		for _, sub := range subs {
+			sub.Unsubscribe()
+		}
+	}
+	_ = unSubs
 
 	for {
 		select {
@@ -66,25 +84,50 @@ func (api *PublicDownloaderAPI) eventLoop() {
 		case u := <-api.uninstallSyncSubscription:
 			delete(syncSubscriptions, u.c)
 			close(u.uninstalled)
-		case event := <-sub.Chan():
-			if event == nil {
-				return
-			}
-
+			//		case event := <-sub.Chan():
+			//			if event == nil {
+			//				return
+			//			}
+			//
+			//			var notification interface{}
+			//			switch event.Data.(type) {
+			//			case StartEvent:
+			//				notification = &SyncingResult{
+			//					Syncing: true,
+			//					Status:  api.d.Progress(),
+			//				}
+			//			case DoneEvent, FailedEvent:
+			//				notification = false
+			//			}
+			//			// broadcast
+			//			for c := range syncSubscriptions {
+			//				c <- notification
+			//			}
+		case <-startCh:
 			var notification interface{}
-			switch event.Data.(type) {
-			case StartEvent:
-				notification = &SyncingResult{
-					Syncing: true,
-					Status:  api.d.Progress(),
-				}
-			case DoneEvent, FailedEvent:
-				notification = false
+			notification = &SyncingResult{
+				Syncing: true,
+				Status:  api.d.Progress(),
 			}
 			// broadcast
 			for c := range syncSubscriptions {
 				c <- notification
 			}
+		case <-doneCh:
+			var notification interface{}
+			notification = false
+			// broadcast
+			for c := range syncSubscriptions {
+				c <- notification
+			}
+		case <-failedCh:
+			var notification interface{}
+			notification = false
+			// broadcast
+			for c := range syncSubscriptions {
+				c <- notification
+			}
+
 		}
 	}
 }

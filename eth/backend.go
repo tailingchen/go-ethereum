@@ -69,7 +69,7 @@ type Ethereum struct {
 	// DB interfaces
 	chainDb ethdb.Database // Block chain database
 
-	eventMux       *event.TypeMux
+	eventPool      *event.FeedPool
 	engine         consensus.Engine
 	accountManager *accounts.Manager
 
@@ -113,7 +113,7 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 	eth := &Ethereum{
 		chainDb:        chainDb,
 		chainConfig:    chainConfig,
-		eventMux:       ctx.EventMux,
+		eventPool:      ctx.EventPool,
 		accountManager: ctx.AccountManager,
 		engine:         CreateConsensusEngine(ctx, config, chainConfig, chainDb),
 		shutdownChan:   make(chan bool),
@@ -137,7 +137,7 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 	}
 
 	vmConfig := vm.Config{EnablePreimageRecording: config.EnablePreimageRecording}
-	eth.blockchain, err = core.NewBlockChain(chainDb, eth.chainConfig, eth.engine, eth.eventMux, vmConfig)
+	eth.blockchain, err = core.NewBlockChain(chainDb, eth.chainConfig, eth.engine, eth.eventPool, vmConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 		core.WriteChainConfig(chainDb, genesisHash, chainConfig)
 	}
 
-	newPool := core.NewTxPool(config.TxPool, eth.chainConfig, eth.EventMux(), eth.blockchain.State, eth.blockchain.GasLimit)
+	newPool := core.NewTxPool(config.TxPool, eth.chainConfig, eth.EventPool(), eth.blockchain.State, eth.blockchain.GasLimit)
 	eth.txPool = newPool
 
 	maxPeers := config.MaxPeers
@@ -162,11 +162,11 @@ func New(ctx *node.ServiceContext, config *Config) (*Ethereum, error) {
 		}
 	}
 
-	if eth.protocolManager, err = NewProtocolManager(eth.chainConfig, config.SyncMode, config.NetworkId, maxPeers, eth.eventMux, eth.txPool, eth.engine, eth.blockchain, chainDb); err != nil {
+	if eth.protocolManager, err = NewProtocolManager(eth.chainConfig, config.SyncMode, config.NetworkId, maxPeers, eth.eventPool, eth.txPool, eth.engine, eth.blockchain, chainDb); err != nil {
 		return nil, err
 	}
 
-	eth.miner = miner.New(eth, eth.chainConfig, eth.EventMux(), eth.engine)
+	eth.miner = miner.New(eth, eth.chainConfig, eth.EventPool(), eth.engine)
 	eth.miner.SetExtra(makeExtraData(config.ExtraData))
 
 	eth.ApiBackend = &EthApiBackend{eth, nil}
@@ -256,7 +256,7 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "eth",
 			Version:   "1.0",
-			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
+			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventPool),
 			Public:    true,
 		}, {
 			Namespace: "miner",
@@ -351,7 +351,7 @@ func (s *Ethereum) Miner() *miner.Miner { return s.miner }
 func (s *Ethereum) AccountManager() *accounts.Manager  { return s.accountManager }
 func (s *Ethereum) BlockChain() *core.BlockChain       { return s.blockchain }
 func (s *Ethereum) TxPool() *core.TxPool               { return s.txPool }
-func (s *Ethereum) EventMux() *event.TypeMux           { return s.eventMux }
+func (s *Ethereum) EventPool() *event.FeedPool         { return s.eventPool }
 func (s *Ethereum) Engine() consensus.Engine           { return s.engine }
 func (s *Ethereum) ChainDb() ethdb.Database            { return s.chainDb }
 func (s *Ethereum) IsListening() bool                  { return true } // Always listening
@@ -394,7 +394,6 @@ func (s *Ethereum) Stop() error {
 	}
 	s.txPool.Stop()
 	s.miner.Stop()
-	s.eventMux.Stop()
 
 	s.chainDb.Close()
 	close(s.shutdownChan)

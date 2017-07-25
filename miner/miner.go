@@ -19,6 +19,7 @@ package miner
 
 import (
 	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -44,7 +45,7 @@ type Backend interface {
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
-	mux *event.TypeMux
+	eventPool *event.FeedPool
 
 	worker *worker
 
@@ -57,13 +58,13 @@ type Miner struct {
 	shouldStart int32 // should start indicates whether we should start after sync
 }
 
-func New(eth Backend, config *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine) *Miner {
+func New(eth Backend, config *params.ChainConfig, eventPool *event.FeedPool, engine consensus.Engine) *Miner {
 	miner := &Miner{
-		eth:      eth,
-		mux:      mux,
-		engine:   engine,
-		worker:   newWorker(config, engine, common.Address{}, eth, mux),
-		canStart: 1,
+		eth:       eth,
+		eventPool: eventPool,
+		engine:    engine,
+		worker:    newWorker(config, engine, common.Address{}, eth, eventPool),
+		canStart:  1,
 	}
 	miner.Register(NewCpuAgent(eth.BlockChain(), engine))
 	go miner.update()
@@ -76,10 +77,32 @@ func New(eth Backend, config *params.ChainConfig, mux *event.TypeMux, engine con
 // the loop is exited. This to prevent a major security vuln where external parties can DOS you with blocks
 // and halt your mining operation for as long as the DOS continues.
 func (self *Miner) update() {
-	events := self.mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
+	var (
+		startCh  = make(chan downloader.StartEvent)
+		doneCh   = make(chan downloader.DoneEvent)
+		failedCh = make(chan downloader.FailedEvent)
+	)
+
+	// subscribe events
+	eventChs := []interface{}{startCh, doneCh, failedCh}
+	subs := make([]event.Subscription, len(eventChs))
+	cases := make([]reflect.SelectCase, len(eventChs))
+	for i, ch := range eventChs {
+		subs[i] = self.eventPool.Subscribe(ch)
+		cases[i] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
+	}
+
+	// unsubscribe events
+	unSubs := func() {
+		for _, sub := range subs {
+			sub.Unsubscribe()
+		}
+	}
+
 out:
-	for ev := range events.Chan() {
-		switch ev.Data.(type) {
+	for {
+		_, value, _ := reflect.Select(cases)
+		switch value.Interface().(type) {
 		case downloader.StartEvent:
 			atomic.StoreInt32(&self.canStart, 0)
 			if self.Mining() {
@@ -96,7 +119,7 @@ out:
 				self.Start(self.coinbase)
 			}
 			// unsubscribe. we're only interested in this event once
-			events.Unsubscribe()
+			unSubs()
 			// stop immediately and ignore all further pending events
 			break out
 		}

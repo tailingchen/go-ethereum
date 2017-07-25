@@ -51,6 +51,13 @@ var (
 	daoChallengeTimeout = 15 * time.Second // Time allowance for a node to reply to the DAO handshake challenge
 )
 
+var (
+	// txChanSize is the channel size of core.TxPreEvent
+	txChanSize = 4096
+	// minedBlockChanSize is the channel size of core.NewMinedBlockEvent
+	minedBlockChanSize = 10
+)
+
 // errIncompatibleConfig is returned if the requested protocols and configs are
 // not compatible (low protocol version restrictions and high requirements).
 var errIncompatibleConfig = errors.New("incompatible configuration")
@@ -77,9 +84,11 @@ type ProtocolManager struct {
 
 	SubProtocols []p2p.Protocol
 
-	eventMux      *event.TypeMux
-	txSub         *event.TypeMuxSubscription
-	minedBlockSub *event.TypeMuxSubscription
+	eventPool     *event.FeedPool
+	txCh          chan core.TxPreEvent
+	txSub         event.Subscription
+	minedBlockCh  chan core.NewMinedBlockEvent
+	minedBlockSub event.Subscription
 
 	// channels for fetcher, syncer, txsyncLoop
 	newPeerCh   chan *peer
@@ -94,11 +103,11 @@ type ProtocolManager struct {
 
 // NewProtocolManager returns a new ethereum sub protocol manager. The Ethereum sub protocol manages peers capable
 // with the ethereum network.
-func NewProtocolManager(config *params.ChainConfig, mode downloader.SyncMode, networkId uint64, maxPeers int, mux *event.TypeMux, txpool txPool, engine consensus.Engine, blockchain *core.BlockChain, chaindb ethdb.Database) (*ProtocolManager, error) {
+func NewProtocolManager(config *params.ChainConfig, mode downloader.SyncMode, networkId uint64, maxPeers int, eventPool *event.FeedPool, txpool txPool, engine consensus.Engine, blockchain *core.BlockChain, chaindb ethdb.Database) (*ProtocolManager, error) {
 	// Create the protocol manager with the base fields
 	manager := &ProtocolManager{
 		networkId:   networkId,
-		eventMux:    mux,
+		eventPool:   eventPool,
 		txpool:      txpool,
 		blockchain:  blockchain,
 		chaindb:     chaindb,
@@ -157,7 +166,7 @@ func NewProtocolManager(config *params.ChainConfig, mode downloader.SyncMode, ne
 		return nil, errIncompatibleConfig
 	}
 	// Construct the different synchronisation mechanisms
-	manager.downloader = downloader.New(mode, chaindb, manager.eventMux, blockchain, nil, manager.removePeer)
+	manager.downloader = downloader.New(mode, chaindb, manager.eventPool, blockchain, nil, manager.removePeer)
 
 	validator := func(header *types.Header) error {
 		return engine.VerifyHeader(blockchain, header, true)
@@ -200,10 +209,12 @@ func (pm *ProtocolManager) removePeer(id string) {
 
 func (pm *ProtocolManager) Start() {
 	// broadcast transactions
-	pm.txSub = pm.eventMux.Subscribe(core.TxPreEvent{})
+	pm.txCh = make(chan core.TxPreEvent, txChanSize)
+	pm.txSub = pm.eventPool.Subscribe(pm.txCh)
 	go pm.txBroadcastLoop()
 	// broadcast mined blocks
-	pm.minedBlockSub = pm.eventMux.Subscribe(core.NewMinedBlockEvent{})
+	pm.minedBlockCh = make(chan core.NewMinedBlockEvent, minedBlockChanSize)
+	pm.minedBlockSub = pm.eventPool.Subscribe(pm.minedBlockCh)
 	go pm.minedBroadcastLoop()
 
 	// start sync handlers
@@ -214,14 +225,15 @@ func (pm *ProtocolManager) Start() {
 func (pm *ProtocolManager) Stop() {
 	log.Info("Stopping Ethereum protocol")
 
-	pm.txSub.Unsubscribe()         // quits txBroadcastLoop
-	pm.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
+	// Stop delivering events to channel
+	pm.txSub.Unsubscribe()
+	pm.minedBlockSub.Unsubscribe()
 
 	// Quit the sync loop.
 	// After this send has completed, no new peers will be accepted.
 	pm.noMorePeers <- struct{}{}
 
-	// Quit fetcher, txsyncLoop.
+	// Quit fetcher, txsyncLoop
 	close(pm.quitSync)
 
 	// Disconnect existing sessions.
@@ -712,21 +724,25 @@ func (pm *ProtocolManager) BroadcastTx(hash common.Hash, tx *types.Transaction) 
 
 // Mined broadcast loop
 func (self *ProtocolManager) minedBroadcastLoop() {
-	// automatically stops if unsubscribe
-	for obj := range self.minedBlockSub.Chan() {
-		switch ev := obj.Data.(type) {
-		case core.NewMinedBlockEvent:
+	for {
+		select {
+		case ev := <-self.minedBlockCh:
 			self.BroadcastBlock(ev.Block, true)  // First propagate block to peers
 			self.BroadcastBlock(ev.Block, false) // Only then announce to the rest
+		case <-self.quitSync:
+			return
 		}
 	}
 }
 
 func (self *ProtocolManager) txBroadcastLoop() {
-	// automatically stops if unsubscribe
-	for obj := range self.txSub.Chan() {
-		event := obj.Data.(core.TxPreEvent)
-		self.BroadcastTx(event.Tx.Hash(), event.Tx)
+	for {
+		select {
+		case event := <-self.txCh:
+			self.BroadcastTx(event.Tx.Hash(), event.Tx)
+		case <-self.quitSync:
+			return
+		}
 	}
 }
 

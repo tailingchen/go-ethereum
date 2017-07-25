@@ -43,7 +43,7 @@ func TestHeaderVerification(t *testing.T) {
 		headers[i] = block.Header()
 	}
 	// Run the header checker for blocks one-by-one, checking for both valid and invalid nonces
-	chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFaker(), new(event.TypeMux), vm.Config{})
+	chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFaker(), new(event.FeedPool), vm.Config{})
 
 	for i := 0; i < len(blocks); i++ {
 		for j, valid := range []bool{true, false} {
@@ -106,10 +106,10 @@ func testHeaderConcurrentVerification(t *testing.T, threads int) {
 		var results <-chan error
 
 		if valid {
-			chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFaker(), new(event.TypeMux), vm.Config{})
+			chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFaker(), new(event.FeedPool), vm.Config{})
 			_, results = chain.engine.VerifyHeaders(chain, headers, seals)
 		} else {
-			chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFakeFailer(uint64(len(headers)-1)), new(event.TypeMux), vm.Config{})
+			chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFakeFailer(uint64(len(headers)-1)), new(event.FeedPool), vm.Config{})
 			_, results = chain.engine.VerifyHeaders(chain, headers, seals)
 		}
 		// Wait for all the verification results
@@ -171,7 +171,7 @@ func testHeaderConcurrentAbortion(t *testing.T, threads int) {
 	defer runtime.GOMAXPROCS(old)
 
 	// Start the verifications and immediately abort
-	chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFakeDelayer(time.Millisecond), new(event.TypeMux), vm.Config{})
+	chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFakeDelayer(time.Millisecond), new(event.FeedPool), vm.Config{})
 	abort, results := chain.engine.VerifyHeaders(chain, headers, seals)
 	close(abort)
 
