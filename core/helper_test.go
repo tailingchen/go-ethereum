@@ -28,7 +28,7 @@ import (
 // Implement our EthTest Manager
 type TestManager struct {
 	// stateManager *StateManager
-	eventMux *event.TypeMux
+	eventPool *event.FeedPool
 
 	db         ethdb.Database
 	txPool     *TxPool
@@ -64,8 +64,8 @@ func (tm *TestManager) TxPool() *TxPool {
 // 	return tm.stateManager
 // }
 
-func (tm *TestManager) EventMux() *event.TypeMux {
-	return tm.eventMux
+func (tm *TestManager) EventPool() *event.FeedPool {
+	return tm.eventPool
 }
 
 // func (tm *TestManager) KeyManager() *crypto.KeyManager {
@@ -84,7 +84,7 @@ func NewTestManager() *TestManager {
 	}
 
 	testManager := &TestManager{}
-	testManager.eventMux = new(event.TypeMux)
+	testManager.eventPool = new(event.FeedPool)
 	testManager.db = db
 	// testManager.txPool = NewTxPool(testManager)
 	// testManager.blockChain = NewBlockChain(testManager)

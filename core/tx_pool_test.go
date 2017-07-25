@@ -47,7 +47,7 @@ func setupTxPool() (*TxPool, *ecdsa.PrivateKey) {
 	statedb, _ := state.New(common.Hash{}, state.NewDatabase(db))
 
 	key, _ := crypto.GenerateKey()
-	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	pool.resetState()
 
 	return pool, key
@@ -94,7 +94,7 @@ func TestStateChangeDuringPoolReset(t *testing.T) {
 		db, _      = ethdb.NewMemDatabase()
 		key, _     = crypto.GenerateKey()
 		address    = crypto.PubkeyToAddress(key.PublicKey)
-		mux        = new(event.TypeMux)
+		evpool     = new(event.FeedPool)
 		statedb, _ = state.New(common.Hash{}, state.NewDatabase(db))
 		trigger    = false
 	)
@@ -125,7 +125,7 @@ func TestStateChangeDuringPoolReset(t *testing.T) {
 
 	gasLimitFunc := func() *big.Int { return big.NewInt(1000000000) }
 
-	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, mux, stateFunc, gasLimitFunc)
+	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, evpool, stateFunc, gasLimitFunc)
 	defer pool.Stop()
 	pool.resetState()
 
@@ -423,8 +423,10 @@ func TestRemovedTxEvent(t *testing.T) {
 	currentState, _ := pool.currentState()
 	currentState.AddBalance(from, big.NewInt(1000000000000))
 	pool.resetState()
-	pool.eventMux.Post(RemovedTransactionEvent{types.Transactions{tx}})
-	pool.eventMux.Post(ChainHeadEvent{nil})
+	pool.eventPool.Send(RemovedTransactionEvent{types.Transactions{tx}})
+	pool.eventPool.Send(ChainHeadEvent{nil})
+	// wait for handling events
+	<-time.After(500 * time.Millisecond)
 	if pool.pending[from].Len() != 1 {
 		t.Error("expected 1 pending tx, got", pool.pending[from].Len())
 	}
@@ -661,7 +663,7 @@ func testTransactionQueueGlobalLimiting(t *testing.T, nolocals bool) {
 	config.NoLocals = nolocals
 	config.GlobalQueue = config.AccountQueue*3 - 1 // reduce the queue limits to shorten test time (-1 to make it non divisible)
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -752,7 +754,7 @@ func testTransactionQueueTimeLimiting(t *testing.T, nolocals bool) {
 	config.Lifetime = 250 * time.Millisecond
 	config.NoLocals = nolocals
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -891,7 +893,7 @@ func TestTransactionPendingGlobalLimiting(t *testing.T) {
 	config := DefaultTxPoolConfig
 	config.GlobalSlots = config.AccountSlots * 10
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -940,7 +942,7 @@ func TestTransactionCapClearsFromAll(t *testing.T) {
 	config.AccountQueue = 2
 	config.GlobalSlots = 8
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -973,7 +975,7 @@ func TestTransactionPendingMinimumAllowance(t *testing.T) {
 	config := DefaultTxPoolConfig
 	config.GlobalSlots = 0
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -1019,7 +1021,7 @@ func TestTransactionPoolRepricing(t *testing.T) {
 	db, _ := ethdb.NewMemDatabase()
 	statedb, _ := state.New(common.Hash{}, state.NewDatabase(db))
 
-	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -1108,7 +1110,7 @@ func TestTransactionPoolUnderpricing(t *testing.T) {
 	config.GlobalSlots = 2
 	config.GlobalQueue = 2
 
-	pool := NewTxPool(config, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(config, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
@@ -1192,7 +1194,7 @@ func TestTransactionReplacement(t *testing.T) {
 	db, _ := ethdb.NewMemDatabase()
 	statedb, _ := state.New(common.Hash{}, state.NewDatabase(db))
 
-	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.TypeMux), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
+	pool := NewTxPool(DefaultTxPoolConfig, params.TestChainConfig, new(event.FeedPool), func() (*state.StateDB, error) { return statedb, nil }, func() *big.Int { return big.NewInt(1000000) })
 	defer pool.Stop()
 	pool.resetState()
 
