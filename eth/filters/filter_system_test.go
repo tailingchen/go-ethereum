@@ -33,16 +33,16 @@ import (
 )
 
 type testBackend struct {
-	mux *event.TypeMux
-	db  ethdb.Database
+	feedPool *event.FeedPool
+	db       ethdb.Database
 }
 
 func (b *testBackend) ChainDb() ethdb.Database {
 	return b.db
 }
 
-func (b *testBackend) EventMux() *event.TypeMux {
-	return b.mux
+func (b *testBackend) EventPool() *event.FeedPool {
+	return b.feedPool
 }
 
 func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error) {
@@ -72,9 +72,9 @@ func TestBlockSubscription(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mux         = new(event.TypeMux)
+		eventPool   = new(event.FeedPool)
 		db, _       = ethdb.NewMemDatabase()
-		backend     = &testBackend{mux, db}
+		backend     = &testBackend{eventPool, db}
 		api         = NewPublicFilterAPI(backend, false)
 		genesis     = new(core.Genesis).MustCommit(db)
 		chain, _    = core.GenerateChain(params.TestChainConfig, genesis, db, 10, func(i int, gen *core.BlockGen) {})
@@ -113,22 +113,22 @@ func TestBlockSubscription(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 	for _, e := range chainEvents {
-		mux.Post(e)
+		eventPool.Send(e)
 	}
 
 	<-sub0.Err()
 	<-sub1.Err()
 }
 
-// TestPendingTxFilter tests whether pending tx filters retrieve all pending transactions that are posted to the event mux.
+// TestPendingTxFilter tests whether pending tx filters retrieve all pending transactions that are posted to the event pool.
 func TestPendingTxFilter(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mux     = new(event.TypeMux)
-		db, _   = ethdb.NewMemDatabase()
-		backend = &testBackend{mux, db}
-		api     = NewPublicFilterAPI(backend, false)
+		eventPool = new(event.FeedPool)
+		db, _     = ethdb.NewMemDatabase()
+		backend   = &testBackend{eventPool, db}
+		api       = NewPublicFilterAPI(backend, false)
 
 		transactions = []*types.Transaction{
 			types.NewTransaction(0, common.HexToAddress("0xb794f5ea0ba39494ce83a213fffba74279579268"), new(big.Int), new(big.Int), new(big.Int), nil),
@@ -146,7 +146,7 @@ func TestPendingTxFilter(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	for _, tx := range transactions {
 		ev := core.TxPreEvent{Tx: tx}
-		mux.Post(ev)
+		eventPool.Send(ev)
 	}
 
 	for {
@@ -175,10 +175,10 @@ func TestPendingTxFilter(t *testing.T) {
 // If not it must return an error.
 func TestLogFilterCreation(t *testing.T) {
 	var (
-		mux     = new(event.TypeMux)
-		db, _   = ethdb.NewMemDatabase()
-		backend = &testBackend{mux, db}
-		api     = NewPublicFilterAPI(backend, false)
+		eventPool = new(event.FeedPool)
+		db, _     = ethdb.NewMemDatabase()
+		backend   = &testBackend{eventPool, db}
+		api       = NewPublicFilterAPI(backend, false)
 
 		testCases = []struct {
 			crit    FilterCriteria
@@ -220,10 +220,10 @@ func TestInvalidLogFilterCreation(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mux     = new(event.TypeMux)
-		db, _   = ethdb.NewMemDatabase()
-		backend = &testBackend{mux, db}
-		api     = NewPublicFilterAPI(backend, false)
+		eventPool = new(event.FeedPool)
+		db, _     = ethdb.NewMemDatabase()
+		backend   = &testBackend{eventPool, db}
+		api       = NewPublicFilterAPI(backend, false)
 	)
 
 	// different situations where log filter creation should fail.
@@ -241,15 +241,15 @@ func TestInvalidLogFilterCreation(t *testing.T) {
 	}
 }
 
-// TestLogFilter tests whether log filters match the correct logs that are posted to the event mux.
+// TestLogFilter tests whether log filters match the correct logs that are posted to the event pool.
 func TestLogFilter(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mux     = new(event.TypeMux)
-		db, _   = ethdb.NewMemDatabase()
-		backend = &testBackend{mux, db}
-		api     = NewPublicFilterAPI(backend, false)
+		eventPool = new(event.FeedPool)
+		db, _     = ethdb.NewMemDatabase()
+		backend   = &testBackend{eventPool, db}
+		api       = NewPublicFilterAPI(backend, false)
 
 		firstAddr      = common.HexToAddress("0x1111111111111111111111111111111111111111")
 		secondAddr     = common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -310,11 +310,11 @@ func TestLogFilter(t *testing.T) {
 
 	// raise events
 	time.Sleep(1 * time.Second)
-	if err := mux.Post(allLogs); err != nil {
-		t.Fatal(err)
+	if nsend := eventPool.Send(allLogs); nsend == 0 {
+		t.Fatal("Wrong number of subscriptions, want at least 1, got 0")
 	}
-	if err := mux.Post(core.PendingLogsEvent{Logs: allLogs}); err != nil {
-		t.Fatal(err)
+	if nsend := eventPool.Send(core.PendingLogsEvent{Logs: allLogs}); nsend == 0 {
+		t.Fatal("Wrong number of subscriptions, want at least 1, got 0")
 	}
 
 	for i, tt := range testCases {
@@ -349,15 +349,15 @@ func TestLogFilter(t *testing.T) {
 	}
 }
 
-// TestPendingLogsSubscription tests if a subscription receives the correct pending logs that are posted to the event mux.
+// TestPendingLogsSubscription tests if a subscription receives the correct pending logs that are posted to the event pool.
 func TestPendingLogsSubscription(t *testing.T) {
 	t.Parallel()
 
 	var (
-		mux     = new(event.TypeMux)
-		db, _   = ethdb.NewMemDatabase()
-		backend = &testBackend{mux, db}
-		api     = NewPublicFilterAPI(backend, false)
+		eventPool = new(event.FeedPool)
+		db, _     = ethdb.NewMemDatabase()
+		backend   = &testBackend{eventPool, db}
+		api       = NewPublicFilterAPI(backend, false)
 
 		firstAddr      = common.HexToAddress("0x1111111111111111111111111111111111111111")
 		secondAddr     = common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -456,8 +456,8 @@ func TestPendingLogsSubscription(t *testing.T) {
 	// raise events
 	time.Sleep(1 * time.Second)
 	for _, l := range allLogs {
-		if err := mux.Post(l); err != nil {
-			t.Fatal(err)
+		if nsend := eventPool.Send(l); nsend == 0 {
+			t.Fatal("Wrong number of subscriptions, want at least 1, got 0")
 		}
 	}
 }

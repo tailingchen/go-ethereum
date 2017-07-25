@@ -42,7 +42,7 @@ type Backend interface {
 	ProtocolVersion() int
 	SuggestPrice(ctx context.Context) (*big.Int, error)
 	ChainDb() ethdb.Database
-	EventMux() *event.TypeMux
+	EventPool() *event.FeedPool
 	AccountManager() *accounts.Manager
 	// BlockChain API
 	SetHead(number uint64)

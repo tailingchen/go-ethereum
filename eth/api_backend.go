@@ -167,8 +167,8 @@ func (b *EthApiBackend) ChainDb() ethdb.Database {
 	return b.eth.ChainDb()
 }
 
-func (b *EthApiBackend) EventMux() *event.TypeMux {
-	return b.eth.EventMux()
+func (b *EthApiBackend) EventPool() *event.FeedPool {
+	return b.eth.EventPool()
 }
 
 func (b *EthApiBackend) AccountManager() *accounts.Manager {
