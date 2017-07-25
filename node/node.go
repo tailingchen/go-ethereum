@@ -48,9 +48,9 @@ var (
 
 // Node is a container on which services can be registered.
 type Node struct {
-	eventmux *event.TypeMux // Event multiplexer used between the services of a stack
-	config   *Config
-	accman   *accounts.Manager
+	eventPool *event.FeedPool // Event multiplexer used between the services of a stack
+	config    *Config
+	accman    *accounts.Manager
 
 	ephemeralKeystore string          // if non-empty, the key directory that will be removed by Stop
 	instanceDirLock   storage.Storage // prevents concurrent use of instance directory
@@ -121,7 +121,7 @@ func New(conf *Config) (*Node, error) {
 		ipcEndpoint:       conf.IPCEndpoint(),
 		httpEndpoint:      conf.HTTPEndpoint(),
 		wsEndpoint:        conf.WSEndpoint(),
-		eventmux:          new(event.TypeMux),
+		eventPool:         new(event.FeedPool),
 	}, nil
 }
 
@@ -175,7 +175,7 @@ func (n *Node) Start() error {
 		ctx := &ServiceContext{
 			config:         n.config,
 			services:       make(map[reflect.Type]Service),
-			EventMux:       n.eventmux,
+			EventPool:      n.eventPool,
 			AccountManager: n.accman,
 		}
 		for kind, s := range services { // copy needed for threaded access
@@ -627,10 +627,10 @@ func (n *Node) WSEndpoint() string {
 	return n.wsEndpoint
 }
 
-// EventMux retrieves the event multiplexer used by all the network services in
+// EventPool retrieves the event multiplexer used by all the network services in
 // the current protocol stack.
-func (n *Node) EventMux() *event.TypeMux {
-	return n.eventmux
+func (n *Node) EventPool() *event.FeedPool {
+	return n.eventPool
 }
 
 // OpenDatabase opens an existing database with the given name (or creates one if no
