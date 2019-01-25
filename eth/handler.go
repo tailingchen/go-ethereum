@@ -51,6 +51,10 @@ const (
 	// The number is referenced from the size of tx pool.
 	txChanSize = 4096
 
+	// pendingLocalTxChanSize is the size of channel listening to NewTxsEvent.
+	// The number is referenced from the size of tx pool.
+	pendingLocalTxChanSize = 4096
+
 	// minimim number of peers to broadcast new blocks to
 	minBroadcastPeers = 4
 )
@@ -81,10 +85,12 @@ type ProtocolManager struct {
 	fetcher    *fetcher.Fetcher
 	peers      *peerSet
 
-	eventMux      *event.TypeMux
-	txsCh         chan core.NewTxsEvent
-	txsSub        event.Subscription
-	minedBlockSub *event.TypeMuxSubscription
+	eventMux           *event.TypeMux
+	txsCh              chan core.NewTxsEvent
+	txsSub             event.Subscription
+	pendingLocalTxsCh  chan core.PendingLocalTxsEvent
+	pendingLocalTxsSub event.Subscription
+	minedBlockSub      *event.TypeMuxSubscription
 
 	whitelist map[uint64]common.Hash
 
@@ -250,7 +256,10 @@ func (pm *ProtocolManager) Start(maxPeers int) {
 	// broadcast transactions
 	pm.txsCh = make(chan core.NewTxsEvent, txChanSize)
 	pm.txsSub = pm.txpool.SubscribeNewTxsEvent(pm.txsCh)
+	pm.pendingLocalTxsCh = make(chan core.PendingLocalTxsEvent, pendingLocalTxChanSize)
+	pm.pendingLocalTxsSub = pm.txpool.SubscribePendingLocalTxsEvent(pm.pendingLocalTxsCh)
 	go pm.txBroadcastLoop()
+	go pm.pendingLocalTxBroadcastLoop()
 
 	// broadcast mined blocks
 	pm.minedBlockSub = pm.eventMux.Subscribe(core.NewMinedBlockEvent{})
@@ -266,6 +275,7 @@ func (pm *ProtocolManager) Stop() {
 
 	pm.txsSub.Unsubscribe()        // quits txBroadcastLoop
 	pm.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
+	pm.pendingLocalTxsSub.Unsubscribe()
 
 	// Quit the sync loop.
 	// After this send has completed, no new peers will be accepted.
@@ -800,6 +810,15 @@ func (pm *ProtocolManager) BroadcastTxs(txs types.Transactions) {
 	}
 }
 
+// BroadcastPendingLocalTxs will propagate a batch of transactions to all peers
+func (pm *ProtocolManager) BroadcastPendingLocalTxs(txs types.Transactions) {
+	peers := pm.peers.Clone()
+	for _, peer := range peers {
+		peer.AsyncSendTransactions(txs)
+	}
+	log.Info("Broadcast pending local transaction to all peers", "recipients", len(peers))
+}
+
 // Mined broadcast loop
 func (pm *ProtocolManager) minedBroadcastLoop() {
 	// automatically stops if unsubscribe
@@ -819,6 +838,19 @@ func (pm *ProtocolManager) txBroadcastLoop() {
 
 		// Err() channel will be closed when unsubscribing.
 		case <-pm.txsSub.Err():
+			return
+		}
+	}
+}
+
+func (pm *ProtocolManager) pendingLocalTxBroadcastLoop() {
+	for {
+		select {
+		case event := <-pm.pendingLocalTxsCh:
+			pm.BroadcastPendingLocalTxs(event.Txs)
+
+		// Err() channel will be closed when unsubscribing.
+		case <-pm.pendingLocalTxsSub.Err():
 			return
 		}
 	}
