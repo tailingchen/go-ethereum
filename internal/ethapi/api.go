@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -538,6 +539,15 @@ func (s *PublicBlockChainAPI) GetBalance(ctx context.Context, address common.Add
 	return (*hexutil.Big)(state.GetBalance(address)), state.Error()
 }
 
+// GetBalanceByHash returns the amount of wei for the given address in the state of the
+// given block hash. The rpc.LatestBlockNumber and rpc.PendingBlockNumber meta
+// block numbers are also allowed.
+// Deprecated: can be replaced by GetBalance
+func (s *PublicBlockChainAPI) GetBalanceByHash(ctx context.Context, address common.Address, blockHash common.Hash) (*hexutil.Big, error) {
+	hash := rpc.BlockNumberOrHashWithHash(blockHash, false)
+	return s.GetBalance(ctx, address, hash)
+}
+
 // Result structs for GetProof
 type AccountResult struct {
 	Address      common.Address  `json:"address"`
@@ -764,6 +774,13 @@ func DoCall(ctx context.Context, b Backend, args CallArgs, blockNrOrHash rpc.Blo
 	if state == nil || err != nil {
 		return nil, 0, false, err
 	}
+
+	return call(ctx, state, header, b, args, overrides, vmCfg, timeout, globalGasCap)
+}
+
+func call(ctx context.Context, state *state.StateDB, header *types.Header, b Backend, args CallArgs, overrides map[common.Address]account, vmCfg vm.Config, timeout time.Duration, globalGasCap *big.Int) ([]byte, uint64, bool, error) {
+	defer func(start time.Time) { log.Debug("Executing EVM call finished", "runtime", time.Since(start)) }(time.Now())
+
 	// Set sender address or use a default if none specified
 	var addr common.Address
 	if args.From == nil {
@@ -881,6 +898,18 @@ func (s *PublicBlockChainAPI) Call(ctx context.Context, args CallArgs, blockNrOr
 	}
 	result, _, _, err := DoCall(ctx, s.b, args, blockNrOrHash, accounts, vm.Config{}, 5*time.Second, s.b.RPCGasCap())
 	return (hexutil.Bytes)(result), err
+}
+
+// CallByHash executes the given transaction on the state for the given block number.
+//
+// Additionally, the caller can specify a batch of contract for fields overriding.
+//
+// Note, this function doesn't make and changes in the state/blockchain and is
+// useful to execute and retrieve values.
+// Deprecated: can be replaced by Call
+func (s *PublicBlockChainAPI) CallByHash(ctx context.Context, args CallArgs, blockHash common.Hash, overrides *map[common.Address]account) (hexutil.Bytes, error) {
+	hash := rpc.BlockNumberOrHashWithHash(blockHash, false)
+	return s.Call(ctx, args, hash, overrides)
 }
 
 func DoEstimateGas(ctx context.Context, b Backend, args CallArgs, blockNrOrHash rpc.BlockNumberOrHash, gasCap *big.Int) (hexutil.Uint64, error) {
