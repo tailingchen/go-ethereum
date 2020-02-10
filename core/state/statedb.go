@@ -104,7 +104,7 @@ type StateDB struct {
 	StorageUpdates time.Duration
 	StorageCommits time.Duration
 
-	// transferLogs records trasfer logs for each transaction.
+	// transferLogs records transfer logs for each transaction.
 	transferLogs map[common.Hash][]*types.TransferLog
 }
 
